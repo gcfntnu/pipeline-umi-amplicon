@@ -1,0 +1,142 @@
+#-*- mode: snakemake -*-
+import os
+import glob
+from os.path import join
+from datetime import datetime
+
+EXT_DIR = join('data', 'ext')
+INTERIM_DIR = join('data', 'tmp')
+FASTQ_DIR = join('data', 'raw')
+SAMPLES = ['NP_AMM20220510', 'NP_AMM20220511'] #NP_AMM20220510: Bibliotek_mykobakt NP_AMM20220511: Kontroll
+
+rule refseq_genome:
+    params:
+        date = datetime.now().strftime("%d-%m-%Y"),
+        release = '215',
+        url = ['https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/195/955/GCF_000195955.2_ASM19595v2/GCF_000195955.2_ASM19595v2_genomic.fna.gz'],
+        proxy = ''
+    output:
+        genome = join(EXT_DIR, 'fasta', 'H37Rv.fa')
+    threads: 
+        24
+    log:
+        join(EXT_DIR, 'logs', 'genome.log')
+    run:
+        for url in params.url:
+            shell("wget {params.proxy} -O- {url} | gunzip -c >> {output.genome}")
+            shell("echo 'Refseq DNA,release-{params.release},{params.url},{params.date}' >> {log}")
+
+rule refseq_gff:
+    params:
+        date = datetime.now().strftime("%d-%m-%Y"),
+        release = '215',
+        url = ['https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/195/955/GCF_000195955.2_ASM19595v2/GCF_000195955.2_ASM19595v2_genomic.gff.gz'],
+        proxy = ''
+    output:
+        join(EXT_DIR, 'anno', 'H37Rv.gff')
+    threads: 
+        24
+    log:
+        join(EXT_DIR, 'logs', 'gff.log')
+    run: 
+        for i, url in enumerate(params.url):
+            if i == 0:
+                shell("wget {params.proxy} -O- {params.url} | gunzip -c  > {output}")
+            else:
+                shell("wget {params.proxy} -O- {params.url} | gunzip -c  | grep -v '^#' >> {output}")
+            shell("echo 'Refseq GFF,release-{params.release},{params.url},{params.date}' > {log}")
+
+rule refseq_simple_bed:
+    input:
+        rules.refseq_gff.output
+    output:
+        temp(join(EXT_DIR, 'anno', '_H37Rv.bed'))
+    shell:
+        """
+        grep -v '^#' {input} | grep -P '\tgene\t' | cut -d'\t' -f1,4,5,9 > {output}
+        """
+        
+rule refseq_simple_bed2:
+    input:
+        rules.refseq_simple_bed.output
+    output:
+        join(EXT_DIR, 'anno', 'H37Rv.bed')
+    run:
+        with open(input[0]) as fh:
+            txt = fh.read().splitlines()
+        with open(output[0], 'w') as fh:
+            for line in txt:
+                els = line.split('\t')
+                attr = els.pop()
+                name = attr.split(';')[0].split('-')[-1].strip()
+                els.append(name)
+                fh.write('\t'.join(els) + '\n')
+        
+rule amplicon_table:
+    input:
+        join(EXT_DIR, 'www', 'Master Clone List Mtb Gateway.pdf')
+    output:
+        join(EXT_DIR, 'clones.txt')
+    shell:
+        'python scripts/extract_genes.py {input} > {output}'
+
+
+def get_fastq(wildcards):
+    return glob.glob(join(FASTQ_DIR, wildcards.sample, '*.fastq'))
+
+rule map_1d:
+    input:
+        FQ = get_fastq,
+        REF = join(EXT_DIR, 'fasta', 'H37Rv.fa')
+    params:
+        read_number = 0,
+        minimap2_param = "-ax map-ont -k 13 "
+    output:
+        BAM = join(INTERIM_DIR, '{sample}', 'pre_align', '1_d.bam'),
+        BAI = join(INTERIM_DIR, '{sample}', 'pre_align', '1_d.bam.bai')
+    threads:
+        24
+    shell:        
+        'catfishq --max_n {params.read_number} {input.FQ} | ' 
+        'minimap2 {params.minimap2_param} -t {threads} {input.REF} - | '
+        'samtools sort -@ 5 -o {output.BAM} - '
+        '&& samtools index -@ {threads} {output.BAM} '
+
+rule split_reads:
+    input:
+        bam = join(INTERIM_DIR, '{sample}', 'pre_align', '1_d.bam'),
+        bed = join(EXT_DIR, 'anno', 'H37Rv.bed')
+    output:
+        DIR = directory(join(INTERIM_DIR, '{sample}', 'fasta_prefilter_{min_overlap}')),
+        STATS = join(INTERIM_DIR, '{sample}', 'stats', 'umi_filter_reads_stats_{min_overlap}.txt')
+    params:
+        min_overlap = 0.7
+    shell:
+        """
+        mkdir -p {output.DIR}
+        umi_filter_reads --min_overlap {wildcards.min_overlap} -o {output.DIR} {input.bed} {input.bam} 2>&1 | tee {output.STATS}
+        """
+
+rule whitelist:
+    input:
+        join(INTERIM_DIR, '{sample}', 'stats', 'umi_filter_reads_stats_{min_overlap}.txt')
+    output:
+        join(INTERIM_DIR, '{sample}', 'whitelist_{min_count}_{min_overlap}.txt')
+    params:
+        min_count = 2
+    run:
+        with open(input[0]) as fh:
+            txt = fh.read().splitlines()[1:] # skip total (first line)
+
+        with open(output[0], 'w') as out:
+            for i, line in enumerate(txt):
+                if line.startswith('Reads found'):
+                    n = int(line.split(': ')[-1].strip())
+                    if n >= float(wildcards.min_count):
+                        previous_line = txt[i -1]
+                        out.write(previous_line + '\n')
+
+
+rule all:
+    input:
+        expand(rules.whitelist.output, sample=SAMPLES, min_overlap=[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9], min_count = [1,2,5,10,50,100])
