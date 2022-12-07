@@ -178,13 +178,14 @@ def filter_reads(args):
 
             logging.info("Reads found: {}".format(n_reads_region))
 
-    ontarget_perc = 0
+    ontarget_perc = 0.0
     if n_total:
-        ontarget_perc = int(100.0 * n_ontarget / n_total)
+        ontarget_perc = 100.0 * (n_ontarget / n_total)
 
-    concatermer_perc = 0
+    concatermer_perc = 0.0
     if n_ontarget:
         concatermer_perc = int(100.0 * n_concatamer / n_ontarget)
+    short_perc = 0.0
     if n_ontarget:
         short_perc = int(100.0 * n_short / n_ontarget)
     logging.info("On target: {} ({}%)".format(n_ontarget, ontarget_perc))

@@ -334,28 +334,33 @@ def parse_clusters(args):
                         break
 
     if n_written == 0 or reads_found == 0:
-        raise RuntimeError(
-            "ERROR - did not find a single cluster passing the min_read threashold!"
+        #raise RuntimeError(
+        #    "ERROR - did not find a single cluster passing the min_read threashold!"
+        #)
+        print("did not find a single cluster passing the min_read threshold!")
+        
+    if n_clusters == 0:
+            logging.info(
+                "Clusters: {}% written ({})".format(0, n_written)
+            )
+    else:
+        logging.info(
+            "Clusters: {}% written ({})".format(
+                int(n_written * 100.0 / n_clusters), n_written
+            )
         )
-
-    logging.info(
-        "Clusters: {}% written ({})".format(
-            int(n_written * 100.0 / n_clusters), n_written
+        logging.info("Reads: {} found".format(reads_found))
+        logging.info(
+            "Reads: {} removed ({}%)".format(
+                reads_skipped, reads_skipped * 100.0 / (reads_skipped + reads_found)
+            )
         )
-    )
-    logging.info("Reads: {} found".format(reads_found))
-    logging.info(
-        "Reads: {} removed ({}%)".format(
-            reads_skipped, reads_skipped * 100.0 / (reads_skipped + reads_found)
+        logging.info("Reads: {}% written".format(int(reads_written * 100.0 / reads_found)))
+        logging.info(
+            "Reads: {}% in written clusters".format(
+                int(reads_written_clusters * 100.0 / reads_found)
+            )
         )
-    )
-    logging.info("Reads: {}% written".format(int(reads_written * 100.0 / reads_found)))
-    logging.info(
-        "Reads: {}% in written clusters".format(
-            int(reads_written_clusters * 100.0 / reads_found)
-        )
-    )
-
 
 def main(argv=sys.argv[1:]):
     """
